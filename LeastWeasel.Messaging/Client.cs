@@ -15,7 +15,7 @@ namespace LeastWeasel.Messaging
             this.hostName = hostName;
             this.service = service;
             this.port = port;
-            this.connections = new Connection[System.Environment.ProcessorCount];
+            this.connections = new Connection[3];
             this.nextConectionIndex = 0;
         }
         

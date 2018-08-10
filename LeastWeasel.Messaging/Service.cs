@@ -8,8 +8,8 @@ using MessagePack;
 public class Service
 {
     public string Name {get;set;}
-    public Dictionary<string, Func<byte[], object>> RequestDeserializers;
-    public Dictionary<string, Func<byte[], object>> ResponseDeserializers;
+    public Dictionary<string, Func<ArraySegment<byte>, object>> RequestDeserializers;
+    public Dictionary<string, Func<ArraySegment<byte>, object>> ResponseDeserializers;
     public Dictionary<string, Func<object, Task<object>>> Handlers;
     private MD5CryptoServiceProvider md5;
     public Dictionary<long, string> HashMethodLookup;
@@ -17,8 +17,8 @@ public class Service
 
     public Service()
     {
-        RequestDeserializers = new Dictionary<string, Func<byte[], object>>();
-        ResponseDeserializers = new Dictionary<string, Func<byte[], object>>();
+        RequestDeserializers = new Dictionary<string, Func<ArraySegment<byte>, object>>();
+        ResponseDeserializers = new Dictionary<string, Func<ArraySegment<byte>, object>>();
         Handlers = new Dictionary<string, Func<object, Task<object>>>();
         this.HashMethodLookup = new Dictionary<long, string>();
         this.md5 = new MD5CryptoServiceProvider();
@@ -29,12 +29,6 @@ public class Service
     public Service RegisterHandler<TRequest, TResponse>(string method, Func<TRequest, Task<TResponse>> handler)
     {
         RequestDeserializers.Add(method, (x) => LZ4MessagePackSerializer.Deserialize<TRequest>(x));
-        // RequestDeserializers.Add(method, (bytes) => 
-        // {
-        //     Console.WriteLine($"Deserializing {bytes.Length} as {typeof(TResponse).Name} for {method}");
-        //     var message = LZ4MessagePackSerializer.Deserialize<TRequest>(bytes);
-        //     return message;
-        // });
         Handlers.Add(method, async (message) => { return await handler((TRequest)message); });
         AddMethodHash(method);
         return this;

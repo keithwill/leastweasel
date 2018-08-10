@@ -14,8 +14,10 @@ namespace LeastWeasel.Messaging
     public class Connection : IDisposable
     {
     
-        private ConcurrentDictionary<long, ResponseCorrelation> messageCorrelationLookup = new ConcurrentDictionary<long, ResponseCorrelation>();
-        private AsyncQueue<(string method, object message, long messageId)> sendQueue = new AsyncQueue<(string, object, long)>();
+        private ConcurrentDictionary<long, TaskCompletionSource<object>> messageCorrelationLookup = new ConcurrentDictionary<long, TaskCompletionSource<object>>();
+        private AsyncQueue<(string method, object message, long messageId)> sendQueue = 
+            new AsyncQueue<(string, object, long)>();
+
         private readonly Client client;
         private long nextMessageId;
         private Socket socket;
@@ -46,6 +48,7 @@ namespace LeastWeasel.Messaging
     {
 
             const int messageHeaderLength = 8 + 4 + 8; // messageId, methodHash, messageLength
+            var deserializeBuffer = new byte[512];
 
             while (true)
             {
@@ -76,13 +79,19 @@ namespace LeastWeasel.Messaging
                             var messageId = BitConverter.ToInt64(messageIdBytes);
                             var methodHash = BitConverter.ToInt64(methodHashBytes);
                             var method = client.Service.HashMethodLookup[methodHash];
-                            var message = client.Service.ResponseDeserializers[method](buffer.Slice(messageHeaderLength, messageLength).ToArray());
+                            if (deserializeBuffer.Length < messageLength)
+                            {
+                                Array.Resize(ref deserializeBuffer, messageLength);
+                            }
+                            buffer.Slice(messageHeaderLength, messageLength).CopyTo(deserializeBuffer);
+                            var deserializeSegment = new ArraySegment<byte>(deserializeBuffer, 0, messageLength);
+                            var message = client.Service.ResponseDeserializers[method](deserializeSegment);
                             buffer = buffer.Slice(endOfMessage);
                             readMessage = true;
                             
                             if (messageCorrelationLookup.TryRemove(messageId, out var correlation))
                             {
-                                correlation.TaskCompletionSource.SetResult(message);
+                                correlation.SetResult(message);
                             }
                         }  
 
@@ -145,25 +154,23 @@ namespace LeastWeasel.Messaging
 
         private async Task SendLoop(CancellationToken cancellationToken)
         {
-            byte[] sendBuffer = new byte[4096];
+            byte[] sendBuffer = new byte[512];
             const int messageOverhead = 8 + 4 + 8; // messageId, messageLength, methodHash
 
-            do
+            while (!cancellationToken.IsCancellationRequested)
             {
-                while (!cancellationToken.IsCancellationRequested)
-                {
-                    var messageCall = await sendQueue.DequeueAsync(cancellationToken);
-                    var messageIdBytes = BitConverter.GetBytes(messageCall.messageId);
-                    var methodHashBytes = BitConverter.GetBytes(client.Service.MethodHashLookup[messageCall.method]);
-                    var serializedMessageLength = LZ4MessagePackSerializer.SerializeToBlock(ref sendBuffer, messageOverhead, messageCall.message, MessagePackSerializer.DefaultResolver );
-                    var messageLengthBytes = BitConverter.GetBytes(serializedMessageLength);
-                    Buffer.BlockCopy(messageIdBytes, 0, sendBuffer, 0, messageIdBytes.Length);
-                    Buffer.BlockCopy(methodHashBytes, 0, sendBuffer, 8, methodHashBytes.Length);
-                    Buffer.BlockCopy(messageLengthBytes, 0, sendBuffer, 16, messageLengthBytes.Length);
-                    //Console.WriteLine($"Socket:{socket.Handle} >>> Id:{messageCall.messageId} Method:{messageCall.method} Bytes:{serializedMessageLength}");
-                    await socket.SendAsync(sendBuffer.AsMemory(0, messageOverhead + serializedMessageLength), SocketFlags.None, cancellationToken);
-                }
-            } while (!cancellationToken.IsCancellationRequested);
+                var messageCall = await sendQueue.DequeueAsync(cancellationToken);
+                var messageIdBytes = BitConverter.GetBytes(messageCall.messageId);
+                var methodHashBytes = BitConverter.GetBytes(client.Service.MethodHashLookup[messageCall.method]);
+                var serializedMessageLength = LZ4MessagePackSerializer.SerializeToBlock(ref sendBuffer, messageOverhead, messageCall.message, MessagePackSerializer.DefaultResolver );
+                var messageLengthBytes = BitConverter.GetBytes(serializedMessageLength);
+                Buffer.BlockCopy(messageIdBytes, 0, sendBuffer, 0, messageIdBytes.Length);
+                Buffer.BlockCopy(methodHashBytes, 0, sendBuffer, 8, methodHashBytes.Length);
+                Buffer.BlockCopy(messageLengthBytes, 0, sendBuffer, 16, messageLengthBytes.Length);
+                int sendLength = messageOverhead + serializedMessageLength;
+                _ = await socket.SendAsync(sendBuffer.AsMemory(0, sendLength), SocketFlags.None, cancellationToken);
+
+            }
             this.socket.Close();
         }
 
@@ -181,17 +188,10 @@ namespace LeastWeasel.Messaging
         public Task<object> Request<TRequest>(string method, TRequest request)
         {
             var messageId = Interlocked.Increment(ref this.nextMessageId);
-
-            var responseCorrelation = new ResponseCorrelation(
-                messageId,
-                method,
-                new TaskCompletionSource<object>()
-            );
-            messageCorrelationLookup.TryAdd(messageId, responseCorrelation);
-
+            var completionSource = new TaskCompletionSource<object>();
+            messageCorrelationLookup.TryAdd(messageId, completionSource);
             Send(method, request, messageId);
-
-            return responseCorrelation.TaskCompletionSource.Task;
+            return completionSource.Task;
         }
 
         public void Dispose()

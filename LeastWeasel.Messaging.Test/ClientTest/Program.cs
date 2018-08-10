@@ -45,20 +45,17 @@ namespace ClientTest
                 
                 sw.Start();
 
-                var concurrency = 8;
+                var concurrency = 300;
                 var requests = 10000;
 
                 Task[] tasks = new Task[concurrency];
                 for(int j = 0; j < tasks.Length; j++)
                 {
                     tasks[j] = Task.Run(async () => {
-
-                        var subtasks = new Task[requests];
-                        for(int i = 0; i < subtasks.Length; i++)
+                        for(int i = 0; i < requests; i++)
                         {
-                            subtasks[i] = client.Request<Request, Response>("TestRPC", request);
+                            _ = await client.Request<Request, Response>("TestRPC", request);
                         }
-                        await Task.WhenAll(subtasks);
                     });
                 }
 
