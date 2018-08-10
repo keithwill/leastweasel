@@ -17,7 +17,6 @@ namespace ClientTest
             using (var client = new Client("localhost", service))
             {
                 await client.ConnectAsync();
-                //Console.WriteLine("Connected");
 
                 var request = new Request
                 {
@@ -45,25 +44,17 @@ namespace ClientTest
                 
                 sw.Start();
 
-                var concurrency = 300;
-                var requests = 10000;
+                var numberRequests = 1000;
 
-                Task[] tasks = new Task[concurrency];
-                for(int j = 0; j < tasks.Length; j++)
+                for (int i = 0; i < numberRequests; i++)
                 {
-                    tasks[j] = Task.Run(async () => {
-                        for(int i = 0; i < requests; i++)
-                        {
-                            _ = await client.Request<Request, Response>("TestRPC", request);
-                        }
-                    });
+                    var result = await client.Request<Request, Response>("TestRPC", request);
                 }
-
-                await Task.WhenAll(tasks);
 
                 sw.Stop();
                 var elapsed = sw.Elapsed;
-                Console.WriteLine($"Took {elapsed} for {concurrency * requests} roundtrips");
+
+                Console.WriteLine($"Took {elapsed} for {numberRequests} roundtrips");
             }
 
 

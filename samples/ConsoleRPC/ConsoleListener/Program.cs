@@ -13,8 +13,7 @@ namespace ListenerTest
         {
             var service = new Service();
             service.RegisterHandler<Request, Response>("TestRPC", async (x) => {
-                //await Task.Delay(100);
-                //Console.WriteLine($"Handler <<< Id:{x.Id}");
+                await Task.Delay(1);
                 return new Response{
                     Acknowledgement = "Returned result",
                     Id = x.Id,

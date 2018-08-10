@@ -7,8 +7,8 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\LeastWeasel.Messaging\LeastWeasel.Messaging.csproj" />
-    <ProjectReference Include="..\ModelTest\ModelTest.csproj" />
+    <ProjectReference Include="..\..\..\src\LeastWeasel.Messaging\LeastWeasel.Messaging.csproj" />
+    <ProjectReference Include="..\ConsoleModel\ConsoleModel.csproj" />
   </ItemGroup>
 
 </Project>
