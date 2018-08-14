@@ -1,16 +1,18 @@
 using System;
 using System.Security.Cryptography;
 
-public static class Md5ExtensionMethods
+namespace LeastWeasel.Messaging
 {
-
-    public static long ComputeMD5HashAsInt64(this string value)
+    public static class Md5ExtensionMethods
     {
-        var md5 = new MD5CryptoServiceProvider();
-        var valueBytes = System.Text.Encoding.Unicode.GetBytes(value);
-        var hash = md5.ComputeHash(valueBytes);
-        var result = BitConverter.ToInt64(hash, 0);
-        return result;
-    }
 
+        public static long ComputeMD5HashAsInt64(this string value)
+        {
+            var md5 = new MD5CryptoServiceProvider();
+            var valueBytes = System.Text.Encoding.Unicode.GetBytes(value);
+            var hash = md5.ComputeHash(valueBytes);
+            var result = BitConverter.ToInt64(hash, 0);
+            return result;
+        }
+    }
 }

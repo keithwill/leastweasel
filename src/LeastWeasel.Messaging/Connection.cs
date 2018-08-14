@@ -38,7 +38,8 @@ namespace LeastWeasel.Messaging
 
         private async Task ReceiveLoop(CancellationToken cancellationToken)
         {
-            var pipe = new Pipe();
+            var pipeOptions = new PipeOptions(null, null, null, 4_000_000L, 3_000_000);
+            var pipe = new Pipe(pipeOptions);
             Task writing = FillPipeAsync(socket, pipe.Writer);
             Task reading = ReadPipeAsync(socket, pipe.Reader);
             await Task.WhenAll(reading, writing);
@@ -115,7 +116,7 @@ namespace LeastWeasel.Messaging
 
 
         private async Task FillPipeAsync(Socket socket, PipeWriter writer)
-        {
+        {  
                 const int minimumBufferSize = 512;
 
                 while (true)
