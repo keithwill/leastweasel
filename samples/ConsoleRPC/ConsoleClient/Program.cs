@@ -5,59 +5,48 @@ using System.Threading.Tasks;
 using LeastWeasel.Messaging;
 using ModelTest;
 
-namespace ClientTest
-{
-    class Program
-    {
-        static async Task Main(string[] args)
-        {
-            var service = new Service();
-            service.Register<Request, Response>("TestRPC");      
+namespace ClientTest {
+    class Program {
+        static async Task Main (string[] args) {
+            var service = new Service ();
+            service.RegisterRequest<Request, Response> ("TestRPC");
 
-            using (var client = new Client("localhost", service))
-            {
-                await client.ConnectAsync();
+            using (var client = new Client ("localhost", service)) {
+                await client.ConnectAsync ();
 
-                var request = new Request
-                {
+                var request = new Request {
                     Id = 1,
                     Name = "Sample Request",
                     Email = "test@test.com",
-                    Details = new List<RequestDetail>
-                    {
-                        new RequestDetail
-                        {
-                            Id = 1,
-                            Name = "Detail1",
-                            Number = 1
-                        },
-                        new RequestDetail
-                        {
-                            Id = 2,
-                            Name = "Detail2",
-                            Number = 2
-                        }
+                    Details = new List<RequestDetail> {
+                    new RequestDetail {
+                    Id = 1,
+                    Name = "Detail1",
+                    Number = 1
+                    },
+                    new RequestDetail {
+                    Id = 2,
+                    Name = "Detail2",
+                    Number = 2
+                    }
                     }
                 };
 
-                Stopwatch sw = new Stopwatch();
-                
-                sw.Start();
+                Stopwatch sw = new Stopwatch ();
+
+                sw.Start ();
 
                 var numberRequests = 1000;
 
-                for (int i = 0; i < numberRequests; i++)
-                {
-                    var result = await client.Request<Request, Response>("TestRPC", request);
+                for (int i = 0; i < numberRequests; i++) {
+                    var result = await client.Request<Request, Response> ("TestRPC", request);
                 }
 
-                sw.Stop();
+                sw.Stop ();
                 var elapsed = sw.Elapsed;
 
-                Console.WriteLine($"Took {elapsed} for {numberRequests} roundtrips");
+                Console.WriteLine ($"Took {elapsed} for {numberRequests} roundtrips");
             }
-
-
 
         }
     }

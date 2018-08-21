@@ -1,27 +1,31 @@
-
 using System;
 using System.Collections.Generic;
-using System.Security.Cryptography;
-using System.Threading.Tasks;
-using MessagePack;
-using LeastWeasel.Messaging.File;
-using System.Text;
 using System.IO;
+using System.Security.Cryptography;
+using System.Text;
+using System.Threading.Tasks;
+
+using LeastWeasel.Abstractions;
+using LeastWeasel.Messaging.File;
+
+using MessagePack;
 
 namespace LeastWeasel.Messaging
 {
 
-    public class Service
+    public class Service : IService
     {
-        public string Name {get;set;}
+        public string Name { get; set; }
         public Dictionary<string, Func<ArraySegment<byte>, object>> RequestDeserializers;
         public Dictionary<string, Func<ArraySegment<byte>, object>> ResponseDeserializers;
-        public Dictionary<string, Func<object, Task<object>>> Handlers;
+        public Dictionary<string, Func<object, Task<object>>> RequestHandlers;
+
+        public Dictionary<string, Func<object, Task>> SendHandlers;
         private MD5CryptoServiceProvider md5;
         public Dictionary<long, string> HashMethodLookup;
         public Dictionary<string, long> MethodHashLookup;
 
-        internal string PreSharedKey {get;set;}
+        internal string PreSharedKey { get; set; }
 
         public string FileStagingDirectory = "staging";
 
@@ -29,14 +33,16 @@ namespace LeastWeasel.Messaging
         {
             this.RequestDeserializers = new Dictionary<string, Func<ArraySegment<byte>, object>>();
             this.ResponseDeserializers = new Dictionary<string, Func<ArraySegment<byte>, object>>();
-            this.Handlers = new Dictionary<string, Func<object, Task<object>>>();
+            this.RequestHandlers = new Dictionary<string, Func<object, Task<object>>>();
+            this.SendHandlers = new Dictionary<string, Func<object, Task>>();
             this.HashMethodLookup = new Dictionary<long, string>();
             this.md5 = new MD5CryptoServiceProvider();
             this.MethodHashLookup = new Dictionary<string, long>();
             RegisterFileHandlers();
         }
 
-        public Service(string preSharedKey) : base() {
+        public Service(string preSharedKey) : base()
+        {
             this.PreSharedKey = preSharedKey;
         }
 
@@ -45,22 +51,23 @@ namespace LeastWeasel.Messaging
 
             string fullStagingDirectory = System.IO.Path.GetFullPath(FileStagingDirectory);
 
-            Register<FileChunkSend, FileChunkSendResponse>("SendFileChunk");
-            Handlers.Add("SendFileChunk", async (message) => {
+            RegisterRequest<FileChunkSend, FileChunkSendResponse>("SendFileChunk");
+            RequestHandlers.Add("SendFileChunk", async(message) =>
+            {
                 var request = message as FileChunkSend;
 
                 var filePath = System.IO.Path.GetFullPath(
                     System.IO.Path.Combine(fullStagingDirectory, request.FilePath)
-                    );
+                );
 
                 if (!filePath.StartsWith(fullStagingDirectory))
                 {
                     return new FileChunkSendResponse
                     {
                         Success = false,
-                        ErrorMessage = "Path of provided FileName was invalid. " + 
-                            "Ensure the FileName does not contain relative directory directives. " + 
-                            "FileName: " + request.FilePath 
+                            ErrorMessage = "Path of provided FileName was invalid. " +
+                            "Ensure the FileName does not contain relative directory directives. " +
+                            "FileName: " + request.FilePath
                     };
                 }
 
@@ -74,7 +81,7 @@ namespace LeastWeasel.Messaging
                 {
                     FileMode fileMode = request.Offset == 0 ? FileMode.Create : FileMode.Open;
 
-                    using (var fs = new FileStream(filePath, fileMode, FileAccess.ReadWrite, FileShare.Read))
+                    using(var fs = new FileStream(filePath, fileMode, FileAccess.ReadWrite, FileShare.Read))
                     {
                         fs.Seek(request.Offset, SeekOrigin.Begin);
                         await fs.WriteAsync(request.Data, 0, request.Data.Length);
@@ -84,22 +91,30 @@ namespace LeastWeasel.Messaging
                         Success = true
                     };
                 }
-                catch(Exception ex)
+                catch (Exception ex)
                 {
                     return new FileChunkSendResponse
                     {
                         Success = false,
-                        ErrorMessage = ex.Message
+                            ErrorMessage = ex.Message
                     };
                 }
 
             });
         }
 
-        public Service RegisterHandler<TRequest, TResponse>(string method, Func<TRequest, Task<TResponse>> handler)
+        public IService RegisterRequestHandler<TRequest, TResponse>(string method, Func<TRequest, Task<TResponse>> handler)
         {
             RequestDeserializers.Add(method, (x) => LZ4MessagePackSerializer.Deserialize<TRequest>(x));
-            Handlers.Add(method, async (message) => { return await handler((TRequest)message); });
+            RequestHandlers.Add(method, async(message) => { return await handler((TRequest) message); });
+            AddMethodHash(method);
+            return this;
+        }
+
+        public IService RegisterSendHandler<TRequest>(string method, Func<TRequest, Task> handler)
+        {
+            RequestDeserializers.Add(method, (x) => LZ4MessagePackSerializer.Deserialize<TRequest>(x));
+            SendHandlers.Add(method, async(message) => { await handler((TRequest) message); });
             AddMethodHash(method);
             return this;
         }
@@ -111,7 +126,7 @@ namespace LeastWeasel.Messaging
             MethodHashLookup.Add(method, methodHash);
         }
 
-        public Service Register<TRequest, TResponse>(string method)
+        public IService RegisterRequest<TRequest, TResponse>(string method)
         {
             RequestDeserializers.Add(method, (x) => LZ4MessagePackSerializer.Deserialize<TRequest>(x));
             ResponseDeserializers.Add(method, (x) => LZ4MessagePackSerializer.Deserialize<TResponse>(x));
@@ -119,13 +134,13 @@ namespace LeastWeasel.Messaging
             return this;
         }
 
-        public Service Register<TRequest>(string method)
+        public IService RegisterSend<TRequest>(string method)
         {
             RequestDeserializers.Add(method, (x) => LZ4MessagePackSerializer.Deserialize<TRequest>(x));
             AddMethodHash(method);
             return this;
         }
-        
+
         /// <summary>
         /// If set, this service will not respond to requets unless the client is using the same
         /// pre shared key. This does not encrypt traffic.
