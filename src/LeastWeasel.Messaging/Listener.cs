@@ -1,6 +1,7 @@
 using System;
 using System.Buffers;
 using System.Collections.Concurrent;
+using System.IO;
 using System.IO.Pipelines;
 using System.Net;
 using System.Net.Sockets;
@@ -19,14 +20,14 @@ namespace LeastWeasel.Messaging
         private readonly int port;
         private Socket listenSocket;
 
-        private AsyncQueue < (Socket socket, byte[] messageIdBytes, byte[] methodHashBytes, object message) > returnMessageQueue;
+        private AsyncQueue<(Socket socket, byte[] messageIdBytes, byte[] methodHashBytes, object message)> returnMessageQueue;
 
         public Listener(Service service, int port = DEFAULT_PORT)
         {
             this.service = service;
             this.port = port;
             this.listenSocket = new Socket(SocketType.Stream, ProtocolType.Tcp);
-            this.returnMessageQueue = new AsyncQueue < (Socket, byte[], byte[], object) > ();
+            this.returnMessageQueue = new AsyncQueue<(Socket, byte[], byte[], object)>();
         }
 
         public async Task RunAsync(CancellationToken cancellationToken)
@@ -38,7 +39,7 @@ namespace LeastWeasel.Messaging
             {
                 var client = await listenSocket.AcceptAsync();
 
-                var returnQueue = new AsyncQueue < (byte[] messageIdBytes, byte[] methodHashBytes, object message) > ();
+                var returnQueue = new AsyncQueue<(long messageId, long methodHash, object message)>();
                 _ = ProcessReturnMessages(client, returnQueue, cancellationToken);
                 _ = ProcessMessagesAsync(client, returnQueue, cancellationToken);
                 cancellationToken.ThrowIfCancellationRequested();
@@ -47,31 +48,45 @@ namespace LeastWeasel.Messaging
 
         private async Task ProcessReturnMessages(
             Socket client,
-            AsyncQueue < (byte[] messageIdBytes, byte[] methodHashBytes, object message) > returnQueue,
+            AsyncQueue<(long messageId, long methodHash, object message)> returnQueue,
             CancellationToken cancellationToken
         )
         {
-            var sendBuffer = new byte[512];
-            const int messageOverhead = 8 + 8 + 4; // messageId, methodHash, messageLength
 
-            while (!cancellationToken.IsCancellationRequested)
+            const int messageOverhead = 8 + 8 + 4; // messageId, methodHash, messageLength
+            using (var mem = new MemoryStream(512))
+            using (var bin = new BinaryWriter(mem))
             {
-                var returnCall = await returnQueue.DequeueAsync(cancellationToken);
-                var messageIdBytes = returnCall.messageIdBytes;
-                var methodHashBytes = returnCall.methodHashBytes;
-                var messageLength = LZ4MessagePackSerializer.SerializeToBlock(ref sendBuffer, messageOverhead, returnCall.message, MessagePackSerializer.DefaultResolver);
-                var messageLengthBytes = BitConverter.GetBytes(messageLength);
-                Buffer.BlockCopy(messageIdBytes, 0, sendBuffer, 0, messageIdBytes.Length);
-                Buffer.BlockCopy(methodHashBytes, 0, sendBuffer, 8, methodHashBytes.Length);
-                Buffer.BlockCopy(messageLengthBytes, 0, sendBuffer, 16, messageLengthBytes.Length);
-                var sendLength = messageLength + messageOverhead;
-                await client.SendAsync(sendBuffer.AsMemory(0, sendLength), SocketFlags.None);
+                while (!cancellationToken.IsCancellationRequested)
+                {
+                    var returnCall = await returnQueue.DequeueAsync(cancellationToken);
+                    // var messageIdBytes = returnCall.messageIdBytes;
+                    // var methodHashBytes = returnCall.methodHashBytes;
+                    mem.Seek(messageOverhead, SeekOrigin.Begin);
+
+                    //MessagePackSerializer.Serialize(mem, returnCall.message);
+                    MessagePackSerializer.Serialize(mem, returnCall.message);
+
+                    var messageLength = (int)(mem.Position - messageOverhead);
+                    //var messageLength = LZ4MessagePackSerializer.SerializeToBlock(ref sendBuffer, messageOverhead, returnCall.message, MessagePackSerializer.DefaultResolver);
+
+                    mem.Seek(0, SeekOrigin.Begin);
+                    var messageLengthBytes = BitConverter.GetBytes(messageLength);
+                    bin.Write(returnCall.messageId);
+                    bin.Write(returnCall.methodHash);
+                    bin.Write(messageLength);
+
+                    var sendBuffer = mem.GetBuffer();
+                    var sendSegment = new ArraySegment<byte>(sendBuffer, 0, messageOverhead + (int)messageLength);
+
+                    await client.SendAsync(sendSegment, SocketFlags.None);
+                }
             }
         }
 
         private async Task ProcessMessagesAsync(
             Socket client,
-            AsyncQueue < (byte[] messageIdBytes, byte[] methodHashBytes, object message) > returnQueue,
+            AsyncQueue<(long messageId, long methodHash, object message)> returnQueue,
             CancellationToken cancellationToken
         )
         {
@@ -85,7 +100,7 @@ namespace LeastWeasel.Messaging
         private async Task ReadPipeAsync(
             Socket socket,
             PipeReader reader,
-            AsyncQueue < (byte[] messageIdBytes, byte[] methodHashBytes, object message) > returnQueue,
+            AsyncQueue<(long messageId, long methodHash, object message)> returnQueue,
             CancellationToken cancellationToken
         )
         {
@@ -130,14 +145,14 @@ namespace LeastWeasel.Messaging
                             readMessage = true;
                             if (service.SendHandlers.TryGetValue(method, out var handler))
                             {
-                                _ = Task.Run(async() => await handler(message));
+                                _ = Task.Run(async () => await handler(message));
                             }
                             else if (service.RequestHandlers.TryGetValue(method, out var requestHandler))
                             {
-                                _ = Task.Run(async() =>
+                                _ = Task.Run(async () =>
                                 {
                                     var returnMessage = await requestHandler(message);
-                                    returnQueue.Enqueue((messageIdBytes, methodHashBytes, returnMessage));
+                                    returnQueue.Enqueue((messageId, methodHash, returnMessage));
                                 });
                             }
                         }

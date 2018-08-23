@@ -1,6 +1,7 @@
 using System;
 using System.Buffers;
 using System.Collections.Concurrent;
+using System.IO;
 using System.IO.Pipelines;
 using System.Linq;
 using System.Net.Sockets;
@@ -8,14 +9,14 @@ using System.Threading;
 using System.Threading.Tasks;
 using MessagePack;
 
-namespace LeastWeasel.Messaging 
+namespace LeastWeasel.Messaging
 {
 
     public class Connection : IDisposable
     {
-    
+
         private ConcurrentDictionary<long, TaskCompletionSource<object>> messageCorrelationLookup = new ConcurrentDictionary<long, TaskCompletionSource<object>>();
-        private AsyncQueue<(string method, object message, long messageId)> sendQueue = 
+        private AsyncQueue<(string method, object message, long messageId)> sendQueue =
             new AsyncQueue<(string, object, long)>();
 
         private readonly Client client;
@@ -27,13 +28,13 @@ namespace LeastWeasel.Messaging
             this.client = client;
             this.nextMessageId = 0;
             this.socket = new Socket(SocketType.Stream, ProtocolType.Tcp);
-        } 
+        }
 
         public async Task ConnectAsync(CancellationToken cancellationToken)
         {
             await this.socket.ConnectAsync(client.HostName, client.Port);
-            _ = Task.Run( async () => { await ReceiveLoop(cancellationToken);});
-            _ = Task.Run( async () => { await SendLoop(cancellationToken);});
+            _ = Task.Run(async () => { await ReceiveLoop(cancellationToken); });
+            _ = Task.Run(async () => { await SendLoop(cancellationToken); });
         }
 
         private async Task ReceiveLoop(CancellationToken cancellationToken)
@@ -45,8 +46,8 @@ namespace LeastWeasel.Messaging
             await Task.WhenAll(reading, writing);
         }
 
-    private async Task ReadPipeAsync(Socket socket, PipeReader reader)
-    {
+        private async Task ReadPipeAsync(Socket socket, PipeReader reader)
+        {
 
             const int messageHeaderLength = 8 + 4 + 8; // messageId, methodHash, messageLength
             var deserializeBuffer = new byte[512];
@@ -89,12 +90,12 @@ namespace LeastWeasel.Messaging
                             var message = client.Service.ResponseDeserializers[method](deserializeSegment);
                             buffer = buffer.Slice(endOfMessage);
                             readMessage = true;
-                            
+
                             if (messageCorrelationLookup.TryRemove(messageId, out var correlation))
                             {
                                 correlation.SetResult(message);
                             }
-                        }  
+                        }
 
                     }
 
@@ -112,66 +113,72 @@ namespace LeastWeasel.Messaging
             }
 
             reader.Complete();
-    }
+        }
 
 
         private async Task FillPipeAsync(Socket socket, PipeWriter writer)
-        {  
-                const int minimumBufferSize = 512;
+        {
+            const int minimumBufferSize = 512;
 
-                while (true)
+            while (true)
+            {
+                try
                 {
-                    try
-                    {
-                        // Request a minimum of 512 bytes from the PipeWriter
-                        Memory<byte> memory = writer.GetMemory(minimumBufferSize);
+                    // Request a minimum of 512 bytes from the PipeWriter
+                    Memory<byte> memory = writer.GetMemory(minimumBufferSize);
 
-                        int bytesRead = await socket.ReceiveAsync(memory, SocketFlags.None);
-                        if (bytesRead == 0)
-                        {
-                            break;
-                        }
-
-                        // Tell the PipeWriter how much was read
-                        writer.Advance(bytesRead);
-                    }
-                    catch
+                    int bytesRead = await socket.ReceiveAsync(memory, SocketFlags.None);
+                    if (bytesRead == 0)
                     {
                         break;
                     }
 
-                    // Make the data available to the PipeReader
-                    FlushResult result = await writer.FlushAsync();
-
-                    if (result.IsCompleted)
-                    {
-                        break;
-                    }
+                    // Tell the PipeWriter how much was read
+                    writer.Advance(bytesRead);
+                }
+                catch
+                {
+                    break;
                 }
 
-                // Signal to the reader that we're done writing
-                writer.Complete();
+                // Make the data available to the PipeReader
+                FlushResult result = await writer.FlushAsync();
+
+                if (result.IsCompleted)
+                {
+                    break;
+                }
+            }
+
+            // Signal to the reader that we're done writing
+            writer.Complete();
         }
 
         private async Task SendLoop(CancellationToken cancellationToken)
         {
-            byte[] sendBuffer = new byte[512];
+            //byte[] sendBuffer = new byte[512];
             const int messageOverhead = 8 + 4 + 8; // messageId, messageLength, methodHash
 
-            while (!cancellationToken.IsCancellationRequested)
+            using (var mem = new MemoryStream(512))
+            using (var bin = new BinaryWriter(mem))
             {
-                var messageCall = await sendQueue.DequeueAsync(cancellationToken);
-                var messageIdBytes = BitConverter.GetBytes(messageCall.messageId);
-                var methodHashBytes = BitConverter.GetBytes(client.Service.MethodHashLookup[messageCall.method]);
-                var serializedMessageLength = LZ4MessagePackSerializer.SerializeToBlock(ref sendBuffer, messageOverhead, messageCall.message, MessagePackSerializer.DefaultResolver );
-                var messageLengthBytes = BitConverter.GetBytes(serializedMessageLength);
-                Buffer.BlockCopy(messageIdBytes, 0, sendBuffer, 0, messageIdBytes.Length);
-                Buffer.BlockCopy(methodHashBytes, 0, sendBuffer, 8, methodHashBytes.Length);
-                Buffer.BlockCopy(messageLengthBytes, 0, sendBuffer, 16, messageLengthBytes.Length);
-                int sendLength = messageOverhead + serializedMessageLength;
-                _ = await socket.SendAsync(sendBuffer.AsMemory(0, sendLength), SocketFlags.None, cancellationToken);
+                while (!cancellationToken.IsCancellationRequested)
+                {
+                    var messageCall = await sendQueue.DequeueAsync(cancellationToken);
+                    mem.Seek(messageOverhead, SeekOrigin.Begin);
+                    MessagePackSerializer.Serialize(mem, messageCall.message);
+                    var messageLength = (int)mem.Position - messageOverhead;
+                    mem.Seek(0, SeekOrigin.Begin);
+                    bin.Write(messageCall.messageId);
+                    bin.Write(client.Service.MethodHashLookup[messageCall.method]);
+                    bin.Write(messageLength);
+                    int sendLength = messageOverhead + messageLength;
+                    var sendBuffer = mem.GetBuffer().AsMemory(0, sendLength);
+                    _ = await socket.SendAsync(sendBuffer, SocketFlags.None, cancellationToken);
 
+                }
             }
+
             this.socket.Close();
         }
 
@@ -183,7 +190,7 @@ namespace LeastWeasel.Messaging
 
         private void Send(string method, object message, long messageId)
         {
-            sendQueue.Enqueue( (method, message, messageId) );
+            sendQueue.Enqueue((method, message, messageId));
         }
 
         public Task<object> Request<TRequest>(string method, TRequest request)
@@ -203,6 +210,6 @@ namespace LeastWeasel.Messaging
 
 
 
-        
+
     }
 }

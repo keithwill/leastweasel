@@ -52,7 +52,7 @@ namespace LeastWeasel.Messaging
             string fullStagingDirectory = System.IO.Path.GetFullPath(FileStagingDirectory);
 
             RegisterRequest<FileChunkSend, FileChunkSendResponse>("SendFileChunk");
-            RequestHandlers.Add("SendFileChunk", async(message) =>
+            RequestHandlers.Add("SendFileChunk", async (message) =>
             {
                 var request = message as FileChunkSend;
 
@@ -65,7 +65,7 @@ namespace LeastWeasel.Messaging
                     return new FileChunkSendResponse
                     {
                         Success = false,
-                            ErrorMessage = "Path of provided FileName was invalid. " +
+                        ErrorMessage = "Path of provided FileName was invalid. " +
                             "Ensure the FileName does not contain relative directory directives. " +
                             "FileName: " + request.FilePath
                     };
@@ -81,7 +81,7 @@ namespace LeastWeasel.Messaging
                 {
                     FileMode fileMode = request.Offset == 0 ? FileMode.Create : FileMode.Open;
 
-                    using(var fs = new FileStream(filePath, fileMode, FileAccess.ReadWrite, FileShare.Read))
+                    using (var fs = new FileStream(filePath, fileMode, FileAccess.ReadWrite, FileShare.Read))
                     {
                         fs.Seek(request.Offset, SeekOrigin.Begin);
                         await fs.WriteAsync(request.Data, 0, request.Data.Length);
@@ -96,7 +96,7 @@ namespace LeastWeasel.Messaging
                     return new FileChunkSendResponse
                     {
                         Success = false,
-                            ErrorMessage = ex.Message
+                        ErrorMessage = ex.Message
                     };
                 }
 
@@ -105,16 +105,16 @@ namespace LeastWeasel.Messaging
 
         public IService RegisterRequestHandler<TRequest, TResponse>(string method, Func<TRequest, Task<TResponse>> handler)
         {
-            RequestDeserializers.Add(method, (x) => LZ4MessagePackSerializer.Deserialize<TRequest>(x));
-            RequestHandlers.Add(method, async(message) => { return await handler((TRequest) message); });
+            RequestDeserializers.Add(method, (x) => MessagePackSerializer.Deserialize<TRequest>(x));
+            RequestHandlers.Add(method, async (message) => { return await handler((TRequest)message); });
             AddMethodHash(method);
             return this;
         }
 
         public IService RegisterSendHandler<TRequest>(string method, Func<TRequest, Task> handler)
         {
-            RequestDeserializers.Add(method, (x) => LZ4MessagePackSerializer.Deserialize<TRequest>(x));
-            SendHandlers.Add(method, async(message) => { await handler((TRequest) message); });
+            RequestDeserializers.Add(method, (x) => MessagePackSerializer.Deserialize<TRequest>(x));
+            SendHandlers.Add(method, async (message) => { await handler((TRequest)message); });
             AddMethodHash(method);
             return this;
         }
@@ -128,15 +128,15 @@ namespace LeastWeasel.Messaging
 
         public IService RegisterRequest<TRequest, TResponse>(string method)
         {
-            RequestDeserializers.Add(method, (x) => LZ4MessagePackSerializer.Deserialize<TRequest>(x));
-            ResponseDeserializers.Add(method, (x) => LZ4MessagePackSerializer.Deserialize<TResponse>(x));
+            RequestDeserializers.Add(method, (x) => MessagePackSerializer.Deserialize<TRequest>(x));
+            ResponseDeserializers.Add(method, (x) => MessagePackSerializer.Deserialize<TResponse>(x));
             AddMethodHash(method);
             return this;
         }
 
         public IService RegisterSend<TRequest>(string method)
         {
-            RequestDeserializers.Add(method, (x) => LZ4MessagePackSerializer.Deserialize<TRequest>(x));
+            RequestDeserializers.Add(method, (x) => MessagePackSerializer.Deserialize<TRequest>(x));
             AddMethodHash(method);
             return this;
         }
