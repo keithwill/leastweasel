@@ -125,7 +125,7 @@ namespace LeastWeasel.Messaging
                     {
                         var messagePreambleBytes = buffer.Slice(0, 5).ToArray();
                         messageBodyLength = BitConverter.ToInt32(messagePreambleBytes, 0);
-                        messageType = (MessageType)messagePreambleBytes[5];
+                        messageType = (MessageType)messagePreambleBytes[4];
                         switch (messageType)
                         {
                             case MessageType.Send:
@@ -147,13 +147,13 @@ namespace LeastWeasel.Messaging
                     {
 
                         // We have at least one message in the buffer
-                        var methodHashBytes = buffer.Slice(6, 8).ToArray();
+                        var methodHashBytes = buffer.Slice(5, 8).ToArray();
                         var methodHash = BitConverter.ToInt64(methodHashBytes);
                         var method = this.service.HashMethodLookup[methodHash];
 
                         if (messageType == MessageType.Request || messageType == MessageType.Response)
                         {
-                            var messageIdBytes = buffer.Slice(15, 8).ToArray();
+                            var messageIdBytes = buffer.Slice(13, 8).ToArray();
                             messageId = BitConverter.ToInt64(messageIdBytes);
                         }
 
@@ -222,7 +222,7 @@ namespace LeastWeasel.Messaging
                                 break;
 
                         }
-
+                        messageLength = 0;
                     }
 
                 }
@@ -290,9 +290,11 @@ namespace LeastWeasel.Messaging
                 {
                     var messageCall = await sendQueue.DequeueAsync(shutdownToken);
 
-                    mem.Seek(5, SeekOrigin.Begin);
+                    mem.Seek(0, SeekOrigin.Begin);
+                    bin.Write(0);
                     bin.Write((byte)messageCall.messageType);
-                    bin.Write(service.MethodHashLookup[messageCall.method]);
+                    var methodHash = service.MethodHashLookup[messageCall.method];
+                    bin.Write(methodHash);
 
                     switch (messageCall.messageType)
                     {
@@ -305,6 +307,7 @@ namespace LeastWeasel.Messaging
                             break;
                         case MessageType.ReliableRequest:
                         case MessageType.ReliableResponse:
+                            //bin.Write(messageCall.reliableMessageId) ?
                             throw new NotImplementedException();
                             break;
                     }

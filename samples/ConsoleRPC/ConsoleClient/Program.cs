@@ -41,7 +41,7 @@ namespace ClientTest
 
                 sw.Start();
 
-                var numberRequests = 100000;
+                var numberRequests = 10000;
                 for (int i = 0; i < numberRequests; i++)
                 {
                     await client.Request<Request, Response>("TestRPC", request);
