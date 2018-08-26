@@ -14,7 +14,7 @@ namespace ClientTest
             var service = new Service();
             service.RegisterRequest<Request, Response>("TestRPC");
 
-            using (var client = new Client("localhost", service))
+            using (var client = new RoundRobinClient("localhost", service))
             {
                 await client.ConnectAsync();
 
@@ -41,22 +41,16 @@ namespace ClientTest
 
                 sw.Start();
 
-                var numberRequests = 1000;
-
-                var tasks = new Task[6000];
+                var numberRequests = 100000;
                 for (int i = 0; i < numberRequests; i++)
                 {
-                    for (int j = 0; j < tasks.Length; j++)
-                    {
-                        tasks[j] = client.Request<Request, Response>("TestRPC", request);
-                    }
-                    await Task.WhenAll(tasks);
+                    await client.Request<Request, Response>("TestRPC", request);
                 }
 
                 sw.Stop();
                 var elapsed = sw.Elapsed;
 
-                Console.WriteLine($"Took {elapsed} for {numberRequests} roundtrips");
+                Console.WriteLine($"Took {elapsed} for {numberRequests} roundtrips at {numberRequests / elapsed.TotalSeconds} reqs/sec");
             }
 
         }

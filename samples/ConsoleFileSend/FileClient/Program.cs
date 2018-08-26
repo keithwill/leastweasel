@@ -14,7 +14,7 @@ namespace FileClient
             var service = new Service();
             Stopwatch sw = new Stopwatch();
 
-            using (var client = new Client("localhost", service))
+            using (var client = new RoundRobinClient("localhost", service))
             {
                 await client.ConnectAsync();
                 sw.Start();
@@ -22,7 +22,7 @@ namespace FileClient
             }
             sw.Stop();
             Console.WriteLine($"File send took {sw.Elapsed}");
-            
+
         }
     }
 }
