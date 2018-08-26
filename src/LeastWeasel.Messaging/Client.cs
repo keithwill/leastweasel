@@ -19,8 +19,8 @@ namespace LeastWeasel.Messaging
     {
 
         private ConcurrentDictionary<long, TaskCompletionSource<object>> messageCorrelationLookup = new ConcurrentDictionary<long, TaskCompletionSource<object>>();
-        private AsyncQueue<(string method, object message, long messageId)> sendQueue =
-            new AsyncQueue<(string, object, long)>();
+        private AsyncQueue<(string method, object message, MessageType messageType, long messageId)> sendQueue =
+            new AsyncQueue<(string, object, MessageType, long)>();
 
         private long nextMessageId;
         private Socket socket;
@@ -95,8 +95,14 @@ namespace LeastWeasel.Messaging
         private async Task ReadPipeAsync(Socket socket, PipeReader reader)
         {
 
-            const int messageHeaderLength = 8 + 4 + 8; // messageId, methodHash, messageLength
             var deserializeBuffer = new byte[512];
+            var messageBodyLength = 0;
+            var messageHeaderLength = 0;
+            var messageLength = 0;
+            var messageId = 0L;
+            var reliableMessageId = Guid.Empty;
+
+            MessageType messageType = MessageType.Send;
 
             while (!shutdownToken.IsCancellationRequested)
             {
@@ -110,66 +116,110 @@ namespace LeastWeasel.Messaging
 
                     readMessage = false;
 
-                    if (buffer.Length > messageHeaderLength)
+                    if (buffer.Length < 5)
                     {
-                        //We have enough to get the method name and length of message
-                        var messageLengthBytes = buffer.Slice(16, 4).ToArray();
+                        continue;
+                    }
 
-                        var messageLength = BitConverter.ToInt32(messageLengthBytes);
-
-                        var endOfMessage = messageLength + messageHeaderLength;
-
-                        if (buffer.Length >= endOfMessage)
+                    if (messageLength == 0)
+                    {
+                        var messagePreambleBytes = buffer.Slice(0, 5).ToArray();
+                        messageBodyLength = BitConverter.ToInt32(messagePreambleBytes, 0);
+                        messageType = (MessageType)messagePreambleBytes[5];
+                        switch (messageType)
                         {
-                            // We have at least one message in the buffer
+                            case MessageType.Send:
+                                messageHeaderLength = Constants.SEND_HEADER_SIZE;
+                                break;
+                            case MessageType.Request:
+                            case MessageType.Response:
+                                messageHeaderLength = Constants.REQUEST_HEADER_SIZE;
+                                break;
+                            case MessageType.ReliableRequest:
+                            case MessageType.ReliableResponse:
+                                messageHeaderLength = Constants.RELIABLE_REQUEST_HEADER_SIZE;
+                                break;
+                        }
+                        messageLength = messageHeaderLength + messageBodyLength;
+                    }
 
-                            var messageIdBytes = buffer.Slice(0, 8).ToArray();
-                            var methodHashBytes = buffer.Slice(8, 8).ToArray();
+                    if (buffer.Length >= messageLength)
+                    {
 
-                            var messageId = BitConverter.ToInt64(messageIdBytes);
-                            var methodHash = BitConverter.ToInt64(methodHashBytes);
-                            var method = this.service.HashMethodLookup[methodHash];
-                            if (deserializeBuffer.Length < messageLength)
-                            {
-                                Array.Resize(ref deserializeBuffer, messageLength);
-                            }
-                            buffer.Slice(messageHeaderLength, messageLength).CopyTo(deserializeBuffer);
-                            var deserializeSegment = new ArraySegment<byte>(deserializeBuffer, 0, messageLength);
-                            object message = null;
-                            if (connectionType == ConnectionType.Client)
-                            {
-                                message = service.ResponseDeserializers[method](deserializeSegment);
-                            }
-                            else if (connectionType == ConnectionType.Listener)
-                            {
+                        // We have at least one message in the buffer
+                        var methodHashBytes = buffer.Slice(6, 8).ToArray();
+                        var methodHash = BitConverter.ToInt64(methodHashBytes);
+                        var method = this.service.HashMethodLookup[methodHash];
+
+                        if (messageType == MessageType.Request || messageType == MessageType.Response)
+                        {
+                            var messageIdBytes = buffer.Slice(15, 8).ToArray();
+                            messageId = BitConverter.ToInt64(messageIdBytes);
+                        }
+
+                        if (messageType == MessageType.ReliableRequest ||
+                            messageType == MessageType.ReliableResponse)
+                        {
+                            var reliableMessageBytes = buffer.Slice(15, 16).ToArray();
+                            reliableMessageId = new Guid(reliableMessageBytes);
+                        }
+
+                        if (deserializeBuffer.Length < messageBodyLength)
+                        {
+                            Array.Resize(ref deserializeBuffer, messageBodyLength);
+                        }
+
+                        buffer.Slice(messageHeaderLength, messageBodyLength).CopyTo(deserializeBuffer);
+                        var deserializeSegment = new ArraySegment<byte>(deserializeBuffer, 0, messageLength);
+                        object message = null;
+
+                        switch (messageType)
+                        {
+                            case MessageType.Send:
+                            case MessageType.Request:
+                            case MessageType.ReliableRequest:
                                 message = service.RequestDeserializers[method](deserializeSegment);
-                            }
-                            buffer = buffer.Slice(endOfMessage);
-                            readMessage = true;
+                                break;
+                            case MessageType.Response:
+                            case MessageType.ReliableResponse:
+                                message = service.ResponseDeserializers[method](deserializeSegment);
+                                break;
+                        }
 
-                            // Check if this message matches a sent request for this connection
-                            // or if there is a handler registered for the message
-                            if (messageCorrelationLookup.TryRemove(messageId, out var correlation))
-                            {
-                                correlation.SetResult(message);
-                            }
+                        buffer = buffer.Slice(messageLength);
+                        readMessage = true;
 
-                            if (service.RequestHandlers.TryGetValue(method, out var requestHandler))
-                            {
-                                _ = Task.Run(async () =>
+                        switch (messageType)
+                        {
+                            case MessageType.Send:
+                                if (service.SendHandlers.TryGetValue(method, out var sendHandler))
                                 {
-                                    var returnMessage = await requestHandler(message);
-                                    Send(method, returnMessage, messageId);
-                                });
-                            }
-
-                            if (service.SendHandlers.TryGetValue(method, out var sendHandler))
-                            {
-                                _ = Task.Run(async () =>
+                                    _ = Task.Run(async () =>
+                                    {
+                                        await sendHandler(message);
+                                    });
+                                }
+                                break;
+                            case MessageType.Request:
+                                if (service.RequestHandlers.TryGetValue(method, out var requestHandler))
                                 {
-                                    await sendHandler(message);
-                                });
-                            }
+                                    _ = Task.Run(async () =>
+                                    {
+                                        var returnMessage = await requestHandler(message);
+                                        Send(method, returnMessage, MessageType.Response, messageId);
+                                    });
+                                }
+                                break;
+                            case MessageType.Response:
+                                if (messageCorrelationLookup.TryRemove(messageId, out var correlation))
+                                {
+                                    correlation.SetResult(message);
+                                }
+                                break;
+                            case MessageType.ReliableRequest:
+                            case MessageType.ReliableResponse:
+                                throw new NotImplementedException();
+                                break;
 
                         }
 
@@ -232,8 +282,6 @@ namespace LeastWeasel.Messaging
 
         private async Task SendLoop()
         {
-            //byte[] sendBuffer = new byte[512];
-            const int messageOverhead = 8 + 4 + 8; // messageId, messageLength, methodHash
 
             using (var mem = new MemoryStream(512))
             using (var bin = new BinaryWriter(mem))
@@ -241,12 +289,29 @@ namespace LeastWeasel.Messaging
                 while (!shutdownToken.IsCancellationRequested)
                 {
                     var messageCall = await sendQueue.DequeueAsync(shutdownToken);
-                    mem.Seek(messageOverhead, SeekOrigin.Begin);
+
+                    mem.Seek(5, SeekOrigin.Begin);
+                    bin.Write((byte)messageCall.messageType);
+                    bin.Write(service.MethodHashLookup[messageCall.method]);
+
+                    switch (messageCall.messageType)
+                    {
+                        case MessageType.Send:
+                            // Do nothing for now
+                            break;
+                        case MessageType.Request:
+                        case MessageType.Response:
+                            bin.Write(messageCall.messageId);
+                            break;
+                        case MessageType.ReliableRequest:
+                        case MessageType.ReliableResponse:
+                            throw new NotImplementedException();
+                            break;
+                    }
+                    var messageOverhead = (int)mem.Position;
                     MessagePackSerializer.Serialize(mem, messageCall.message);
                     var messageLength = (int)mem.Position - messageOverhead;
                     mem.Seek(0, SeekOrigin.Begin);
-                    bin.Write(messageCall.messageId);
-                    bin.Write(service.MethodHashLookup[messageCall.method]);
                     bin.Write(messageLength);
                     int sendLength = messageOverhead + messageLength;
                     var sendBuffer = mem.GetBuffer().AsMemory(0, sendLength);
@@ -257,9 +322,9 @@ namespace LeastWeasel.Messaging
             this.socket.Close();
         }
 
-        private void Send(string method, object message, long messageId)
+        private void Send(string method, object message, MessageType messageType, long messageId)
         {
-            sendQueue.Enqueue((method, message, messageId));
+            sendQueue.Enqueue((method, message, messageType, messageId));
         }
 
         public void Dispose()
@@ -277,7 +342,7 @@ namespace LeastWeasel.Messaging
         public void Send<TRequest>(string method, TRequest message)
         {
             var messageId = Interlocked.Increment(ref this.nextMessageId);
-            Send(method, message, messageId);
+            Send(method, message, MessageType.Send, messageId);
         }
 
         public async Task<TResult> Request<TRequest, TResult>(string method, TRequest request)
@@ -285,7 +350,7 @@ namespace LeastWeasel.Messaging
             var messageId = Interlocked.Increment(ref this.nextMessageId);
             var completionSource = new TaskCompletionSource<object>(shutdownToken);
             messageCorrelationLookup.TryAdd(messageId, completionSource);
-            Send(method, request, messageId);
+            Send(method, request, MessageType.Request, messageId);
             return (TResult)(await completionSource.Task);
         }
 
