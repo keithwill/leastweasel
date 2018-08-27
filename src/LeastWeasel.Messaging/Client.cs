@@ -19,15 +19,14 @@ namespace LeastWeasel.Messaging
     {
 
         private ConcurrentDictionary<long, TaskCompletionSource<object>> messageCorrelationLookup = new ConcurrentDictionary<long, TaskCompletionSource<object>>();
-        private AsyncQueue<(string method, object message, MessageType messageType, long messageId)> sendQueue =
-            new AsyncQueue<(string, object, MessageType, long)>();
+        private AsyncQueue<(string method, object message, MessageType messageType, long messageId, Guid reliableId)> sendQueue =
+            new AsyncQueue<(string, object, MessageType, long, Guid reliableId)>();
 
         private long nextMessageId;
         private Socket socket;
         private readonly Service service;
         private readonly string hostName;
         private readonly int port;
-        private ConnectionType connectionType;
         private CancellationToken shutdownToken;
         private CancellationTokenSource shutdownTokenSource;
         private bool disposed;
@@ -47,14 +46,12 @@ namespace LeastWeasel.Messaging
             this.service = service;
             this.hostName = hostName;
             this.port = port;
-            this.connectionType = ConnectionType.Client;
         }
 
         public Client(Service service, Socket socket)
         {
             this.service = service;
             this.socket = socket;
-            this.connectionType = ConnectionType.Listener;
         }
 
         public async Task ConnectAsync()
@@ -133,11 +130,8 @@ namespace LeastWeasel.Messaging
                                 break;
                             case MessageType.Request:
                             case MessageType.Response:
-                                messageHeaderLength = Constants.REQUEST_HEADER_SIZE;
-                                break;
                             case MessageType.ReliableRequest:
-                            case MessageType.ReliableResponse:
-                                messageHeaderLength = Constants.RELIABLE_REQUEST_HEADER_SIZE;
+                                messageHeaderLength = Constants.REQUEST_HEADER_SIZE;
                                 break;
                         }
                         messageLength = messageHeaderLength + messageBodyLength;
@@ -151,17 +145,12 @@ namespace LeastWeasel.Messaging
                         var methodHash = BitConverter.ToInt64(methodHashBytes);
                         var method = this.service.HashMethodLookup[methodHash];
 
-                        if (messageType == MessageType.Request || messageType == MessageType.Response)
+                        if (messageType == MessageType.Request ||
+                            messageType == MessageType.Response ||
+                            messageType == MessageType.ReliableRequest)
                         {
                             var messageIdBytes = buffer.Slice(13, 8).ToArray();
                             messageId = BitConverter.ToInt64(messageIdBytes);
-                        }
-
-                        if (messageType == MessageType.ReliableRequest ||
-                            messageType == MessageType.ReliableResponse)
-                        {
-                            var reliableMessageBytes = buffer.Slice(15, 16).ToArray();
-                            reliableMessageId = new Guid(reliableMessageBytes);
                         }
 
                         if (deserializeBuffer.Length < messageBodyLength)
@@ -181,7 +170,6 @@ namespace LeastWeasel.Messaging
                                 message = service.RequestDeserializers[method](deserializeSegment);
                                 break;
                             case MessageType.Response:
-                            case MessageType.ReliableResponse:
                                 message = service.ResponseDeserializers[method](deserializeSegment);
                                 break;
                         }
@@ -201,12 +189,13 @@ namespace LeastWeasel.Messaging
                                 }
                                 break;
                             case MessageType.Request:
+                            case MessageType.ReliableRequest:
                                 if (service.RequestHandlers.TryGetValue(method, out var requestHandler))
                                 {
                                     _ = Task.Run(async () =>
                                     {
                                         var returnMessage = await requestHandler(message);
-                                        Send(method, returnMessage, MessageType.Response, messageId);
+                                        Send(method, returnMessage, MessageType.Response, messageId, Guid.Empty);
                                     });
                                 }
                                 break;
@@ -215,10 +204,6 @@ namespace LeastWeasel.Messaging
                                 {
                                     correlation.SetResult(message);
                                 }
-                                break;
-                            case MessageType.ReliableRequest:
-                            case MessageType.ReliableResponse:
-                                throw new NotImplementedException();
                                 break;
 
                         }
@@ -290,6 +275,29 @@ namespace LeastWeasel.Messaging
                 {
                     var messageCall = await sendQueue.DequeueAsync(shutdownToken);
 
+                    if (messageCall.messageType == MessageType.ReliableRequest)
+                    {
+
+                        LiteDB.LiteDatabase db;
+                        if (!service.ReliableRequestDatabases.TryGetValue(messageCall.method, out db))
+                        {
+                            db = new LiteDB.LiteDatabase(messageCall.method + "Queue.db");
+                            db.GetCollection<ReliableMessage>("Requests").EnsureIndex("MessageId");
+                        }
+
+                        var requestsCollection = db.GetCollection<ReliableMessage>("Requests");
+
+                        var reliableMessage = new ReliableMessage
+                        {
+                            MessageId = messageCall.reliableId,
+                            Method = messageCall.method,
+                            Request = messageCall.message
+                        };
+
+                        requestsCollection.Insert(reliableMessage);
+
+                    }
+
                     mem.Seek(0, SeekOrigin.Begin);
                     bin.Write(0);
                     bin.Write((byte)messageCall.messageType);
@@ -303,12 +311,8 @@ namespace LeastWeasel.Messaging
                             break;
                         case MessageType.Request:
                         case MessageType.Response:
-                            bin.Write(messageCall.messageId);
-                            break;
                         case MessageType.ReliableRequest:
-                        case MessageType.ReliableResponse:
-                            //bin.Write(messageCall.reliableMessageId) ?
-                            throw new NotImplementedException();
+                            bin.Write(messageCall.messageId);
                             break;
                     }
                     var messageOverhead = (int)mem.Position;
@@ -325,10 +329,12 @@ namespace LeastWeasel.Messaging
             this.socket.Close();
         }
 
-        private void Send(string method, object message, MessageType messageType, long messageId)
+        private void Send(string method, object message, MessageType messageType, long messageId, Guid reliableId)
         {
-            sendQueue.Enqueue((method, message, messageType, messageId));
+            sendQueue.Enqueue((method, message, messageType, messageId, reliableId));
         }
+
+
 
         public void Dispose()
         {
@@ -345,7 +351,7 @@ namespace LeastWeasel.Messaging
         public void Send<TRequest>(string method, TRequest message)
         {
             var messageId = Interlocked.Increment(ref this.nextMessageId);
-            Send(method, message, MessageType.Send, messageId);
+            Send(method, message, MessageType.Send, messageId, Guid.Empty);
         }
 
         public async Task<TResult> Request<TRequest, TResult>(string method, TRequest request)
@@ -353,10 +359,63 @@ namespace LeastWeasel.Messaging
             var messageId = Interlocked.Increment(ref this.nextMessageId);
             var completionSource = new TaskCompletionSource<object>(shutdownToken);
             messageCorrelationLookup.TryAdd(messageId, completionSource);
-            Send(method, request, MessageType.Request, messageId);
+            Send(method, request, MessageType.Request, messageId, Guid.Empty);
             return (TResult)(await completionSource.Task);
         }
 
+        public async Task<ReliableCompleter<TResult>> ReliableRequest<TRequest, TResult>(string method, TRequest request)
+        {
+
+            LiteDB.LiteDatabase db;
+            if (!service.ReliableRequestDatabases.TryGetValue(method, out db))
+            {
+                db = new LiteDB.LiteDatabase(method + "Queue.db");
+                db.GetCollection<ReliableMessage>("Requests").EnsureIndex("MessageId");
+            }
+
+            var requestsCollection = db.GetCollection<ReliableMessage>("Requests");
+
+            var reliableMessageId = Guid.NewGuid();
+
+            var reliableMessage = new ReliableMessage
+            {
+                MessageId = reliableMessageId,
+                Method = method,
+                Request = request
+            };
+
+            var messageId = Interlocked.Increment(ref this.nextMessageId);
+            var completionSource = new TaskCompletionSource<object>(shutdownToken);
+            messageCorrelationLookup.TryAdd(messageId, completionSource);
+            Send(method, request, MessageType.ReliableRequest, messageId, reliableMessageId);
+            var result = (TResult)(await completionSource.Task);
+            var completer = new ReliableCompleter<TResult>();
+            completer.Result = result;
+            completer.Complete = () =>
+            {
+                requestsCollection.Delete(x => x.MessageId == reliableMessageId);
+            };
+            return completer;
+        }
+
+        public IEnumerable<TRequest> GetMessagesToReprocess<TRequest>(string method)
+        {
+            LiteDB.LiteDatabase db;
+            if (!service.ReliableRequestDatabases.TryGetValue(method, out db))
+            {
+                db = new LiteDB.LiteDatabase(method + "Queue.db");
+                db.GetCollection<ReliableMessage>("Requests").EnsureIndex("MessageId");
+            }
+
+            var requestsCollection = db.GetCollection<ReliableMessage>("Requests");
+
+            var results = new List<TRequest>();
+            foreach (var request in requestsCollection.FindAll())
+            {
+                results.Add((TRequest)request.Request);
+            }
+            return results;
+        }
 
         private void GetAllFiles(DirectoryInfo directory, List<string> files)
         {

@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 
 using LeastWeasel.Abstractions;
 using LeastWeasel.Messaging.File;
+using LiteQueue;
 
 using MessagePack;
 
@@ -25,6 +26,8 @@ namespace LeastWeasel.Messaging
         public Dictionary<long, string> HashMethodLookup;
         public Dictionary<string, long> MethodHashLookup;
 
+        public Dictionary<string, LiteDB.LiteDatabase> ReliableRequestDatabases;
+
         internal string PreSharedKey { get; set; }
 
         public string FileStagingDirectory = "staging";
@@ -38,12 +41,8 @@ namespace LeastWeasel.Messaging
             this.HashMethodLookup = new Dictionary<long, string>();
             this.md5 = new MD5CryptoServiceProvider();
             this.MethodHashLookup = new Dictionary<string, long>();
+            this.ReliableRequestDatabases = new Dictionary<string, LiteDB.LiteDatabase>();
             RegisterFileHandlers();
-        }
-
-        public Service(string preSharedKey) : base()
-        {
-            this.PreSharedKey = preSharedKey;
         }
 
         private void RegisterFileHandlers()
@@ -103,7 +102,9 @@ namespace LeastWeasel.Messaging
             });
         }
 
-        public IService RegisterRequestHandler<TRequest, TResponse>(string method, Func<TRequest, Task<TResponse>> handler)
+        public IService RegisterRequestHandler<TRequest, TResponse>(
+            string method, Func<TRequest, Task<TResponse>> handler
+            )
         {
             RequestDeserializers.Add(method, (x) => MessagePackSerializer.Deserialize<TRequest>(x));
             RequestHandlers.Add(method, async (message) => { return await handler((TRequest)message); });
@@ -111,7 +112,9 @@ namespace LeastWeasel.Messaging
             return this;
         }
 
-        public IService RegisterSendHandler<TRequest>(string method, Func<TRequest, Task> handler)
+        public IService RegisterSendHandler<TRequest>(
+            string method, Func<TRequest, Task> handler
+            )
         {
             RequestDeserializers.Add(method, (x) => MessagePackSerializer.Deserialize<TRequest>(x));
             SendHandlers.Add(method, async (message) => { await handler((TRequest)message); });
@@ -146,9 +149,10 @@ namespace LeastWeasel.Messaging
         /// pre shared key. This does not encrypt traffic.
         /// </summary>
         /// <param name="key"></param>
-        public void RequirePreSharedKey(string key)
+        public IService RequirePreSharedKey(string key)
         {
             PreSharedKey = key;
+            return this;
         }
 
     }

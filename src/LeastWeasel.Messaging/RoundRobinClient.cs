@@ -60,6 +60,12 @@ namespace LeastWeasel.Messaging
             return await connections[index].Request<TRequest, TResult>(method, request);
         }
 
+        public async Task<ReliableCompleter<TResult>> ReliableRequest<TRequest, TResult>(string method, TRequest request)
+        {
+            var index = Interlocked.Increment(ref nextConectionIndex) % connections.Length;
+            return await connections[index].ReliableRequest<TRequest, TResult>(method, request);
+        }
+
         public void Dispose()
         {
             if (!disposed)
@@ -83,6 +89,7 @@ namespace LeastWeasel.Messaging
             var index = Interlocked.Increment(ref nextConectionIndex) % connections.Length;
             await connections[index].SendDirectory(directoryPath, remoteDirectoryPath);
         }
+
     }
 
 }
