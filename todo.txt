@@ -1,0 +1,25 @@
+
+Test reliable send from reprocess list from litedb database file
+
+Remove references to LiteQueue, it won't be necessary after all
+
+Retest file and directory send after recent refactoring
+
+Figure out what kind of IL merge can be used, and if it will cause namespace conflicts for 
+consumers that reference LiteDb, or other versions of System.Net.Sockets, etc...
+
+Create the 'server' project to load configuration and plugin assemblies. When plugins
+are found that implement handlers for request and response types and are marked with
+an attribute, they will be registered into a service instance on startup. The server
+can also load some canned services for server health. The server can also optionally
+start and restart (as needed) an asp.net core instance and include service requests
+for publishing a new folder (have to check if System.Diagnostics.Process usage can
+handle this properly)
+
+Create the ASP.NET Middleware to be used to Map API endpoints directly to responses from
+a least weasel service.
+
+Add a way to round robin multiple listeners behind a client (a poor man's load balancer)
+Primarily for more expensive requests processing when mapping gateway Web API calls back
+to least weasel services
+
