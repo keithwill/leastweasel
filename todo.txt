@@ -1,9 +1,13 @@
 
 Test reliable send from reprocess list from litedb database file
 
-Remove references to LiteQueue, it won't be necessary after all
+DONE-- remove references to LiteQueue, it won't be necessary after all
 
-Retest file and directory send after recent refactoring
+Retest file and directory send after recent refactoring - Seems broken
+
+Allow arbitrary serialization/deserialization based on byte[], offset, and object return.
+See if it can incorporate. -- Maybe investigate if using Span<byte> with ref delegates makes
+more sense ala https://stackoverflow.com/questions/2462814/func-delegate-with-ref-variable
 
 Figure out what kind of IL merge can be used, and if it will cause namespace conflicts for 
 consumers that reference LiteDb, or other versions of System.Net.Sockets, etc...
@@ -22,4 +26,6 @@ a least weasel service.
 Add a way to round robin multiple listeners behind a client (a poor man's load balancer)
 Primarily for more expensive requests processing when mapping gateway Web API calls back
 to least weasel services
+
+
 

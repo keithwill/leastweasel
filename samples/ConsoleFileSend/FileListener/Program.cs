@@ -13,7 +13,7 @@ namespace FileListener
             var service = new Service();
             var listener = new Listener(service);
             await listener.RunAsync(CancellationToken.None);
-            
+
         }
     }
 }

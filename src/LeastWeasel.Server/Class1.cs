@@ -1,6 +1,6 @@
 ﻿using System;
 
-namespace LeastWeasel.Abstractions
+namespace LeastWeasel.Server
 {
     public class Class1
     {

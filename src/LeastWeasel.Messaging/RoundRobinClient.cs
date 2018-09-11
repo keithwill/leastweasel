@@ -20,7 +20,7 @@ namespace LeastWeasel.Messaging
             this.hostName = hostName;
             this.service = service;
             this.port = port;
-            this.connections = new Client[3];
+            this.connections = new Client[8];
             this.nextConectionIndex = 0;
         }
 

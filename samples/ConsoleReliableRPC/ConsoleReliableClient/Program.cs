@@ -10,8 +10,20 @@ namespace ConsoleReliableClient
     {
         static async Task Main(string[] args)
         {
+            var requestSerializer = new Serializer<Request>()
+                .Field(x => x.Message, (x, f) => x.Message = f)
+                .Build();
+
+            var responseSerializer = new Serializer<Response>()
+                .Field(x => x.ResponseMessage, (x, f) => x.ResponseMessage = f)
+                .Build();
+
+
             var service = new Service();
-            service.RegisterRequest<Request, Response>("TestRPC");
+            service.RegisterRequest<Request, Response>("TestRPC",
+
+
+            );
 
             using (var client = new RoundRobinClient("localhost", service))
             {

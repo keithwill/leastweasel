@@ -11,8 +11,20 @@ namespace ClientTest
     {
         static async Task Main(string[] args)
         {
+
+            var requestSerializer = new Serializer<Request>()
+                .Field(x => x.Id, (x, f) => x.Id = f)
+                .Build();
+
+            var responseDeserializer = new Serializer<Response>()
+                .Field(x => x.Id, (x, f) => x.Id = f)
+                .Build();
+
             var service = new Service();
-            service.RegisterRequest<Request, Response>("TestRPC");
+            service.RegisterRequest<Request, Response>("TestRPC",
+                (ref Span<byte> x, object value) => requestSerializer.Serialize((Request)value, ref x),
+                (ref Span<byte> x) => responseDeserializer.Deserialize(ref x)
+            );
 
             using (var client = new RoundRobinClient("localhost", service))
             {
@@ -21,20 +33,6 @@ namespace ClientTest
                 var request = new Request
                 {
                     Id = 1,
-                    // Name = "Sample Request",
-                    // Email = "test@test.com",
-                    // Details = new List<RequestDetail> {
-                    // new RequestDetail {
-                    // Id = 1,
-                    // Name = "Detail1",
-                    // Number = 1
-                    // },
-                    // new RequestDetail {
-                    // Id = 2,
-                    // Name = "Detail2",
-                    // Number = 2
-                    // }
-                    // }
                 };
 
                 Stopwatch sw = new Stopwatch();
@@ -42,15 +40,23 @@ namespace ClientTest
                 sw.Start();
 
                 var numberRequests = 10000;
-                for (int i = 0; i < numberRequests; i++)
+                var tasks = new Task[5000];
+                for (int req = 0; req < numberRequests; req++)
                 {
-                    await client.Request<Request, Response>("TestRPC", request);
+                    for (int i = 0; i < tasks.Length; i++)
+                    {
+                        //Console.WriteLine($"Sending task {i}");
+                        tasks[i] = client.Request<Request, Response>("TestRPC", request);
+
+                    }
+                    await Task.WhenAll(tasks);
+                    //Console.WriteLine("Did 10");
                 }
 
                 sw.Stop();
                 var elapsed = sw.Elapsed;
 
-                Console.WriteLine($"Took {elapsed} for {numberRequests} roundtrips at {numberRequests / elapsed.TotalSeconds} reqs/sec");
+                Console.WriteLine($"Took {elapsed} for {numberRequests * tasks.Length} roundtrips at {(numberRequests * tasks.Length) / elapsed.TotalSeconds} reqs/sec");
             }
 
         }
