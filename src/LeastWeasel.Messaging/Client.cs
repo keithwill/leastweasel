@@ -10,6 +10,7 @@ using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
+
 using LeastWeasel.Abstractions;
 using LeastWeasel.Messaging.File;
 
@@ -20,8 +21,8 @@ namespace LeastWeasel.Messaging
     {
 
         private ConcurrentDictionary<long, TaskCompletionSource<object>> messageCorrelationLookup = new ConcurrentDictionary<long, TaskCompletionSource<object>>();
-        private AsyncQueue<(string method, object message, MessageType messageType, long messageId, Guid reliableId)> sendQueue =
-            new AsyncQueue<(string, object, MessageType, long, Guid reliableId)>();
+        private AsyncQueue < (string method, object message, MessageType messageType, long messageId, Guid reliableId) > sendQueue =
+            new AsyncQueue < (string, object, MessageType, long, Guid reliableId) > ();
 
         private long nextMessageId;
         private Socket socket;
@@ -55,8 +56,6 @@ namespace LeastWeasel.Messaging
             this.service = service;
             this.socket = socket;
         }
-
-
 
         public async Task ConnectAsync()
         {
@@ -115,7 +114,6 @@ namespace LeastWeasel.Messaging
 
                 readInMessage += read;
 
-
                 bool readMessage;
 
                 do
@@ -132,8 +130,8 @@ namespace LeastWeasel.Messaging
                     {
                         var messagePreambleBytes = readBuffer.AsSpan(offset, 5);
 
-                        messageBodyLength = MemoryMarshal.Cast<byte, int>(messagePreambleBytes)[0];
-                        messageType = (MessageType)messagePreambleBytes[4];
+                        messageBodyLength = MemoryMarshal.Cast<byte, int>(messagePreambleBytes) [0];
+                        messageType = (MessageType) messagePreambleBytes[4];
                         switch (messageType)
                         {
                             case MessageType.Send:
@@ -165,7 +163,7 @@ namespace LeastWeasel.Messaging
                         //Console.WriteLine("Have enough for a message");
                         // We have at least one message in the buffer
                         var methodHashBytes = readBuffer.AsSpan(offset + 5, 8);
-                        var methodHash = MemoryMarshal.Cast<byte, long>(methodHashBytes)[0];
+                        var methodHash = MemoryMarshal.Cast<byte, long>(methodHashBytes) [0];
                         var method = this.service.HashMethodLookup[methodHash];
 
                         if (messageType == MessageType.Request ||
@@ -173,7 +171,7 @@ namespace LeastWeasel.Messaging
                             messageType == MessageType.ReliableRequest)
                         {
                             var messageIdBytes = readBuffer.AsSpan(offset + 13, 8);
-                            messageId = MemoryMarshal.Cast<byte, long>(messageIdBytes)[0];
+                            messageId = MemoryMarshal.Cast<byte, long>(messageIdBytes) [0];
                         }
 
                         var messageBuffer = readBuffer.AsSpan(offset + messageHeaderLength, messageBodyLength);
@@ -200,7 +198,7 @@ namespace LeastWeasel.Messaging
                                 if (service.SendHandlers.TryGetValue(method, out var sendHandler))
                                 {
                                     var messageToSend = message;
-                                    _ = Task.Run(async () =>
+                                    _ = Task.Run(async() =>
                                     {
                                         await sendHandler(messageToSend);
                                     });
@@ -214,7 +212,7 @@ namespace LeastWeasel.Messaging
                                     var idToSend = messageId;
                                     var messageToHandle = message;
                                     //Console.WriteLine($"{DateTime.Now} - Starting task for request handler " + method);
-                                    _ = Task.Run(async () =>
+                                    _ = Task.Run(async() =>
                                     {
                                         //Console.WriteLine($"{DateTime.Now} - Starting request handler for " + method);
                                         var returnMessage = await requestHandler(messageToHandle);
@@ -239,7 +237,6 @@ namespace LeastWeasel.Messaging
                         }
 
                     }
-
 
                     var remaining = readInMessage - (offset + messageLength);
                     if (remaining > 0)
@@ -288,10 +285,10 @@ namespace LeastWeasel.Messaging
                 }
 
                 var position = 4; // leave room for length
-                buffer[position] = (byte)messageCall.messageType;
+                buffer[position] = (byte) messageCall.messageType;
                 position += 1;
                 var methodHash = service.MethodHashLookup[messageCall.method];
-                MemoryMarshal.Cast<byte, long>(buffer.AsSpan(position, 8))[0] = methodHash;
+                MemoryMarshal.Cast<byte, long>(buffer.AsSpan(position, 8)) [0] = methodHash;
                 position += 8;
 
                 switch (messageCall.messageType)
@@ -302,7 +299,7 @@ namespace LeastWeasel.Messaging
                     case MessageType.Request:
                     case MessageType.Response:
                     case MessageType.ReliableRequest:
-                        MemoryMarshal.Cast<byte, long>(buffer.AsSpan(position, 8))[0] = messageCall.messageId;
+                        MemoryMarshal.Cast<byte, long>(buffer.AsSpan(position, 8)) [0] = messageCall.messageId;
                         position += 8;
                         break;
                 }
@@ -321,7 +318,7 @@ namespace LeastWeasel.Messaging
                         break;
                 }
 
-                MemoryMarshal.Cast<byte, int>(buffer.AsSpan(0, 4))[0] = written;
+                MemoryMarshal.Cast<byte, int>(buffer.AsSpan(0, 4)) [0] = written;
                 int sendLength = messageOverhead + written;
                 var sendBuffer = buffer.AsSpan(0, sendLength);
                 socket.Send(sendBuffer, SocketFlags.None);
@@ -335,8 +332,6 @@ namespace LeastWeasel.Messaging
             //Console.WriteLine($"Equeueing: {messageId}");
             sendQueue.Enqueue((method, message, messageType, messageId, reliableId));
         }
-
-
 
         public void Dispose()
         {
@@ -362,7 +357,7 @@ namespace LeastWeasel.Messaging
             var completionSource = new TaskCompletionSource<object>(shutdownToken);
             messageCorrelationLookup.TryAdd(messageId, completionSource);
             Send(method, request, MessageType.Request, messageId, Guid.Empty);
-            return (TResult)(await completionSource.Task);
+            return (TResult) (await completionSource.Task);
         }
 
         public async Task<ReliableCompleter<TResult>> ReliableRequest<TRequest, TResult>(string method, TRequest request)
@@ -384,7 +379,7 @@ namespace LeastWeasel.Messaging
             var completionSource = new TaskCompletionSource<object>(shutdownToken);
             messageCorrelationLookup.TryAdd(messageId, completionSource);
             Send(method, request, MessageType.ReliableRequest, messageId, reliableMessageId);
-            var result = (TResult)(await completionSource.Task);
+            var result = (TResult) (await completionSource.Task);
             var completer = new ReliableCompleter<TResult>();
             completer.Result = result;
             completer.Complete = () =>
@@ -394,7 +389,6 @@ namespace LeastWeasel.Messaging
             return completer;
         }
 
-
         public IEnumerable<TRequest> GetMessagesToReprocess<TRequest>(string method)
         {
             var db = service.GetReliableRequestDatabase(method);
@@ -403,7 +397,7 @@ namespace LeastWeasel.Messaging
             var results = new List<TRequest>();
             foreach (var request in requestsCollection.FindAll())
             {
-                results.Add((TRequest)request.Request);
+                results.Add((TRequest) request.Request);
             }
             return results;
         }
@@ -436,9 +430,9 @@ namespace LeastWeasel.Messaging
 
         public async Task SendFile(string filePath, string remoteFilePath)
         {
-            var chunkSize = 1048576;
+            var chunkSize = 65_536;
 
-            using (var fs = new System.IO.FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read))
+            using(var fs = new System.IO.FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read))
             {
                 var fileLength = fs.Length;
                 var toRead = fs.Length;
@@ -458,11 +452,11 @@ namespace LeastWeasel.Messaging
                     Stopwatch sw = new Stopwatch();
                     sw.Start();
                     var fileSendResponse = await Request<FileChunkSend, FileChunkSendResponse>("SendFileChunk", new FileChunkSend
-                    {
-                        FilePath = remoteFilePath,
-                        Offset = offset,
-                        Data = buffer
-                    });
+                        {
+                            FilePath = remoteFilePath,
+                                Offset = offset,
+                                Data = buffer
+                        });
                     Console.WriteLine($"{DateTime.Now} - Wrote {(int)(buffer.Length / 1024)}kb and took {sw.ElapsedMilliseconds}ms");
                     if (!fileSendResponse.Success)
                     {
@@ -476,8 +470,6 @@ namespace LeastWeasel.Messaging
 
             }
         }
-
-
 
     }
 }

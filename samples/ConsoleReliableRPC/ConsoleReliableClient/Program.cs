@@ -1,7 +1,9 @@
 ﻿using System;
 using System.Diagnostics;
 using System.Threading.Tasks;
+
 using ConsoleReliableModel;
+
 using LeastWeasel.Messaging;
 
 namespace ConsoleReliableClient
@@ -18,14 +20,13 @@ namespace ConsoleReliableClient
                 .Field(x => x.ResponseMessage, (x, f) => x.ResponseMessage = f)
                 .Build();
 
-
             var service = new Service();
             service.RegisterRequest<Request, Response>("TestRPC",
-
-
+                (ref Span<byte> x, object value) => requestSerializer.Serialize((Request) value, ref x),
+                (ref Span<byte> x) => responseSerializer.Deserialize(ref x)
             );
 
-            using (var client = new RoundRobinClient("localhost", service))
+            using(var client = new RoundRobinClient("localhost", service))
             {
                 await client.ConnectAsync();
 
